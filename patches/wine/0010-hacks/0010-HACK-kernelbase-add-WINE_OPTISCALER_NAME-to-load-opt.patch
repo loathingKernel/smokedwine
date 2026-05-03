@@ -1,0 +1,72 @@
+From d71fd01e41729526c7e932e5ca7951d3e068a088 Mon Sep 17 00:00:00 2001
+From: Stelios Tsampas <loathingkernel@gmail.com>
+Date: Thu, 9 Apr 2026 15:50:43 +0300
+Subject: [PATCH 10/15] HACK: kernelbase: add WINE_OPTISCALER_NAME to load
+ optiscaler's dll from an external location
+
+The matching intentionally matches `name.dll` exactly to allow optiscaler
+to load the real dll through the fully qualified path.
+---
+ dlls/kernelbase/loader.c | 33 ++++++++++++++++++++++++---------
+ 1 file changed, 24 insertions(+), 9 deletions(-)
+
+diff --git a/dlls/kernelbase/loader.c b/dlls/kernelbase/loader.c
+index 6e2f93873dd..06495663c37 100644
+--- a/dlls/kernelbase/loader.c
++++ b/dlls/kernelbase/loader.c
+@@ -559,19 +559,31 @@ HMODULE WINAPI DECLSPEC_HOTPATCH LoadLibraryExA( LPCSTR name, HANDLE file, DWORD
+ /***********************************************************************
+  * LoadLibary replace hack
+  */
+-BOOL loaddll_replace(LPCWSTR name, LPWSTR override)
++BOOL loaddll_optiscaler_hack(LPCWSTR name, LPWSTR override, DWORD size)
+ {
+-    WCHAR envW[64] = {0};
++    WCHAR dllW[64] = {0};
+     UINT ret;
+ 
+-    ret = GetEnvironmentVariableW( L"WINE_LOADDLL_REPLACE", envW, sizeof(envW));
+-    if ( !ret ) return FALSE;
+-    if ( ret > ARRAY_SIZE(envW) )
++    ret = GetEnvironmentVariableW( L"WINE_OPTISCALER_NAME", dllW, sizeof(dllW));
++    if ( !ret || ret >= ARRAY_SIZE(dllW) ) return FALSE;
++
++    if ( !wcscmp( name, dllW ) )
+     {
+-        ERR("WINE_LOADDLL_REPLACE value larger than %zu (%u)\n", ARRAY_SIZE(envW), ret);
+-        return FALSE;
++        swprintf( override, size, L"c:\\windows\\system32\\umu\\%s", dllW );
++        return TRUE;
+     }
+ 
++    return FALSE;
++}
++
++BOOL loaddll_upscaler_hack(LPCWSTR name, LPWSTR override, DWORD size)
++{
++    WCHAR envW[64] = {0};
++    UINT ret;
++
++    ret = GetEnvironmentVariableW( L"WINE_UPSCALER_REPLACE", envW, sizeof(envW));
++    if ( !ret || ret >= ARRAY_SIZE(envW) ) return FALSE;
++
+     if ( wcsstr( envW, L"fsr3" ) )
+     {
+         /* HACK: override amd_fidelityfx_*.dll path to a non-standard location for FSR3 upgrade */
+@@ -619,8 +631,11 @@ HMODULE WINAPI DECLSPEC_HOTPATCH LoadLibraryExW( LPCWSTR name, HANDLE file, DWOR
+         return 0;
+     }
+ 
+-    if ( loaddll_replace(name, overrideW) )
+-        FIXME( "HACK: replaced %s with %s\n", debugstr_w(name), debugstr_w(overrideW));
++    if ( loaddll_optiscaler_hack(name, overrideW, ARRAY_SIZE(overrideW))
++        || loaddll_upscaler_hack(name, overrideW, ARRAY_SIZE(overrideW)) )
++    {
++        FIXME( "HACK: replacing %s with %s\n", debugstr_w(name), debugstr_w(overrideW));
++    }
+ 
+     RtlInitUnicodeString( &str, overrideW[0] ? overrideW : name );
+     if (str.Length && str.Buffer[str.Length/sizeof(WCHAR) - 1] != ' ') return load_library( &str, flags );
+-- 
+2.54.0
+

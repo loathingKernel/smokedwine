@@ -1,0 +1,108 @@
+From c71ee3a9af72b4ef1c49a169a39bfe6b2d8046fa Mon Sep 17 00:00:00 2001
+From: Stelios Tsampas <loathingkernel@gmail.com>
+Date: Thu, 2 Apr 2026 20:39:56 +0300
+Subject: [PATCH 11/15] HACK: kernelbase: add WINE_LOADDLL_REDIRECT to handle
+ arbitrary dlls and paths
+
+Update WINE_LOADDLL_REDIRECT format to handle multiple dlls and their paths.
+The format tries to immitate WINEDLLOVERRIDES, using a semicolon `;` as the separator
+between groups. Each group can set one or more dlls to redirect in a comma `,`
+separated list. The target path is specified with an equal sign `=` followed
+either by the path to the folder containing the dlls or the replacement
+dll itself. There is no path validity checks currently.
+
+The following forms are supported.
+
+`WINE_LOADDLL_REDIRECT=four.dll=c:\\test\\test\\four.dll`
+
+Will load `four.dll` from the specified path.
+
+`WINE_LOADDLL_REDIRECT=one.dll,two.dll,three.dll=c:\\test\\test\\`
+
+Will redirect `one.dll`, `two.dll` and `three.dll` to
+`c:\test\test\one.dll`, `c:\test\test\two.dll` and `c:\test\test\three.dll`
+respectively
+
+`WINE_LOADDLL_REDIRECT=six.dll=c:\\test\\test\\seven.dll;`
+
+Will redirect `six.dll` to load `seven.dll`
+---
+ dlls/kernelbase/loader.c | 61 +++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 60 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/kernelbase/loader.c b/dlls/kernelbase/loader.c
+index 06495663c37..6f7ae2cb875 100644
+--- a/dlls/kernelbase/loader.c
++++ b/dlls/kernelbase/loader.c
+@@ -557,8 +557,67 @@ HMODULE WINAPI DECLSPEC_HOTPATCH LoadLibraryExA( LPCSTR name, HANDLE file, DWORD
+ 
+ 
+ /***********************************************************************
+- * LoadLibary replace hack
++ * LoadLibary redirect/replace hack
+  */
++BOOL loaddll_redirect(LPCWSTR name, LPWSTR override, DWORD size)
++{
++    WCHAR *entry, *next, *match, *token, *path, *stem;
++    WCHAR envW[MAX_PATH * 8] = {0}, nameW[MAX_PATH] = {0};
++    UINT ret;
++
++    if ( wcsstr( name, L"nvidia/wine/nvngx_dlssg.dll" ) )
++    {
++        TRACE("refusing to redirect %ls\n", name);
++        return FALSE;
++    }
++
++    ret = GetEnvironmentVariableW( L"WINE_LOADDLL_REDIRECT", envW, sizeof(envW));
++    if ( !ret ) return FALSE;
++    if ( ret >= ARRAY_SIZE(envW) )
++    {
++        ERR("WINE_LOADDLL_REDIRECT larger than %lu (%u)\n", (unsigned long)ARRAY_SIZE(envW), ret);
++        return FALSE;
++    }
++
++    wcscpy(nameW, name);
++    stem = wcspbrk( nameW, L"\\/" );
++    while (stem)
++    {
++        if ( !wcspbrk( stem + 1, L"\\/" ) )
++            break;
++        stem = wcspbrk( ++stem, L"\\/" );
++    }
++    if ( stem ) stem++;
++    else stem = nameW;
++
++    TRACE("looking for %ls redirect\n", stem);
++
++    entry = envW;
++    while (*entry)
++    {
++        while (*entry == L';') entry++;
++        if (!*entry) break;
++        next = wcschr( entry, L';' );
++        if (next) *next++ = 0;
++        else next = entry + wcslen(entry);
++        if ( (match = wcsstr( entry, stem)) )
++        {
++            path = wcschr( match, L'=' );
++            if (path) *path++ = 0;
++            else return FALSE;
++            token = wcschr( match, L',' );
++            if (token) *token = 0;
++            if ( wcsstr( path, match ) || !wcscmp ( path + wcslen(path) - 4, L".dll" ) )
++                wcscpy( override, path );
++            else
++                swprintf( override, size, L"%s\\%s", path, match );
++            return TRUE;
++        }
++        entry = next;
++    }
++    return FALSE;
++}
++
+ BOOL loaddll_optiscaler_hack(LPCWSTR name, LPWSTR override, DWORD size)
+ {
+     WCHAR dllW[64] = {0};
+-- 
+2.54.0
+
